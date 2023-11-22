@@ -14,7 +14,8 @@ FROM opensuse/leap:15.5
 # 2. RAW image modification on x86_64
 RUN zypper install -y \
     xorriso  \
-    libguestfs kernel-default e2fsprogs parted gptfdisk btrfsprogs
+    libguestfs kernel-default e2fsprogs parted gptfdisk btrfsprogs \
+    squashfs systemd-container createrepo_c
 
 COPY --from=0 /src/eib /bin/eib
 
