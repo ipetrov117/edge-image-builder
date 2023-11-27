@@ -8,7 +8,7 @@ unset ADD_REPO
 unset WORK_DIR
 
 # Set the location of your SLE Micro SelfInstall ISO on the filesystem
-ISO_PATH={{.ISOPath}}
+ISO_NAME={{.ISOName}}
 
 # Provide a list of packages that you want to install from SUSE repositories
 PKG_LIST="{{.PKGList}}"
@@ -22,62 +22,35 @@ REG_CODE="{{.RegCode}}"
 # # Base directory where all the work will be done
 WORK_DIR="{{.WorkDir}}"
 
-# Make sure that the existing repo is clean
-rm -rf $WORK_DIR
-
-# Make temporary eib work-dir and separate for user-provided rpms
-mkdir -p $WORK_DIR
-mkdir -p $WORK_DIR/rpms
-mkdir -p $WORK_DIR/root
-mkdir -p $WORK_DIR/repo
-
-# Copy the path to the original ISO to /tmp
-cp $ISO_PATH $WORK_DIR/SLE-Micro-original.iso
-
-echo $ISO_PATH >> /tmp/before_xorriso
-echo $PKG_LIST >> /tmp/before_xorriso
-echo $ADD_REPO >> /tmp/before_xorriso
-echo $REG_CODE >> /tmp/before_xorriso
-echo $WORK_DIR >> /tmp/before_xorriso
+# Path to the directory where the zypper repo will be created
+REPO_OUT="{{.RepoOut}}"
 
 # Extract the contents of the ISO and extract the raw squashfs
-xorriso -osirrox on -indev $WORK_DIR/SLE-Micro-original.iso extract / $WORK_DIR/iso-root/
+xorriso -osirrox on -indev $WORK_DIR/$ISO_NAME extract / $WORK_DIR/iso-root/
 cd $WORK_DIR/iso-root/
 unsquashfs $WORK_DIR/iso-root/SLE-Micro.raw.squashfs
-
-touch /tmp/after_unsquashfs
 
 # Find the image offset of the rootfs on the raw image
 cd squashfs-root
 sector=$(/usr/sbin/fdisk -l SLE-Micro.raw | awk '/raw3/ {print $2};')
 offset=$(($sector * 512))
 
-
-touch /tmp/before_mount1
-
 # Mount the raw disk image locally to use as a baseline for rpm database
 mount -o loop,offset=$offset SLE-Micro.raw $WORK_DIR/root
-
-touch /tmp/after_mount1
 
 # Mount the /var btrfs subvolume into the rootfs
 loopdev=$(lsblk | grep $WORK_DIR | awk '{print $1}')
 mount /dev/$loopdev -o subvol=@/var $WORK_DIR/root/var
 
-touch /tmp/after_mount2
-
+# Mount /proc and /sys so that we can ensure that suseconnect commands run
 mount -t proc none $WORK_DIR/root/proc
 mount -o bind /sys $WORK_DIR/root/sys
 
-touch /tmp/after_mount34
-
+# Make the btrfs filesystem read-write on the raw disk image
 chroot $WORK_DIR/root btrfs property set / ro false
 
-touch /tmp/after_chroot
-
+# Make sure that there would be dns resolution on the raw disk image
 cp /etc/resolv.conf $WORK_DIR/root/etc
-
-touch /tmp/after_cp
 
 # TODO: use this once main functionality is there
 # Copy the rpms directory locally in the image and make directory for extract
@@ -99,15 +72,12 @@ fi
 # Get SLE15 Service Pack number so we enable PackageHub properly
 SLE_SP=$(cat $WORK_DIR/root/etc/rpm/macros.sle | awk '/sle/ {print $2};' | cut -c4)
 
-touch /tmp/before_zypper_repo
-
 chroot $WORK_DIR/root /bin/bash <<EOF
 suseconnect -r $REG_CODE
 suseconnect -p PackageHub/15.$SLE_SP/x86_64
 zypper ref
 counter=1
 for i in $ADD_REPO; do
-    zypper rr \$i 
     # Add the additional repositories specified by the user
     zypper ar --no-gpgcheck -f \$i addrepo\$counter 
     counter=\$((counter+1))
@@ -126,20 +96,22 @@ fi
 suseconnect -d
 EOF
 
-touch /tmp/after_zypper_repo
+
+#TODO: Attempt to move everything below into the Go code
 
 # Copy the RPM's out from the repo created in the container
-cp -rf $WORK_DIR/root/eib-repo/. $WORK_DIR/repo
+# cp -rf $WORK_DIR/root/eib-repo/. $WORK_DIR/repo
+cp -rf $WORK_DIR/root/eib-repo/. $REPO_OUT
 
 # Clean up the resources created during the dependency process
 umount $WORK_DIR/root/proc
 umount $WORK_DIR/root/sys
 umount $WORK_DIR/root/var
 umount $WORK_DIR/root
-rm -rf $WORK_DIR/iso-root/ $WORK_DIR/root/ $WORK_DIR/SLE-Micro-original.iso
+rm -rf $WORK_DIR/iso-root/ $WORK_DIR/root/ $WORK_DIR/$ISO_NAME
 
 # Check if there has been a failure in the dependency retrieval
-if [ ! -z "$PKG_LIST" ] && [ -z "$(ls -A $WORK_DIR/repo)" ];
+if [ ! -z "$PKG_LIST" ] && [ -z "$(ls -A $REPO_OUT)" ];
 then
 	# PKG_LIST is not empty and the repo directory is empty
 	echo "[ERROR] Dependency retrieval unsuccessful, exiting..."
@@ -151,14 +123,14 @@ else
 	# # Copy in the locally specified RPM's
 	# mkdir -p $WORK_DIR/repo/local
 	# cp $WORK_DIR/rpms/* $WORK_DIR/repo/local/.
-    touch /tmp/before_repo_create
+	
 	# Run createrepo so we can add this to the Combustion phase
-	/usr/bin/createrepo $WORK_DIR/repo
-	echo "[SUCCESS] Repository successfully created at $WORK_DIR/repo."
-    touch /tmp/after_repo_create
+	/usr/bin/createrepo $REPO_OUT
+	echo "[SUCCESS] Repository successfully created at $REPO_OUT."
+
 	# Strip the path and extension from the list of rpms
 	PKG_LIST=$(sed 's|/eib-rpms/||g' <<< "$PKG_LIST")
 	PKG_LIST=$(sed 's|.rpm||g' <<< "$PKG_LIST")
-	echo $PKG_LIST > $WORK_DIR/repo/package-list.txt
+	echo $PKG_LIST > $REPO_OUT/package-list.txt
 	exit 0
 fi
