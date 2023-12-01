@@ -123,4 +123,6 @@ func main() {
 	if err = image.CleanUpBuildDir(ctx); err != nil {
 		zap.L().Error("Failed to clean up build directory", zap.Error(err))
 	}
+
+	time.Sleep(10 * time.Hour)
 }
