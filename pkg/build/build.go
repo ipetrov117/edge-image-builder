@@ -6,11 +6,8 @@ import (
 
 	"github.com/suse-edge/edge-image-builder/pkg/combustion"
 	"github.com/suse-edge/edge-image-builder/pkg/image"
-<<<<<<< HEAD
 	"github.com/suse-edge/edge-image-builder/pkg/log"
-=======
 	"github.com/suse-edge/edge-image-builder/pkg/resolver"
->>>>>>> 5d5b189 (Initial implementation to the pkg dependency resolver)
 )
 
 type configureCombustion func(ctx *image.Context) error
@@ -42,8 +39,16 @@ func (b *Builder) Build() error {
 	// }
 
 	if _, err := resolver.Resolve(b.context); err != nil {
+	p, err := resolver.New(b.context)
+	if err != nil {
 		return err
 	}
+
+	r, err := p.Resolve()
+	if err != nil {
+		return err
+	}
+	fmt.Println(r)
 
 	if err := b.configureCombustion(b.context); err != nil {
 		return fmt.Errorf("configuring combustion: %w", err)

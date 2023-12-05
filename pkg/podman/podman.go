@@ -8,8 +8,10 @@ import (
 
 	"github.com/containers/buildah/define"
 	"github.com/containers/podman/v4/pkg/bindings"
+	"github.com/containers/podman/v4/pkg/bindings/containers"
 	"github.com/containers/podman/v4/pkg/bindings/images"
 	"github.com/containers/podman/v4/pkg/domain/entities"
+	"github.com/containers/podman/v4/pkg/specgen"
 )
 
 const (
@@ -83,56 +85,41 @@ func (p *Podman) Build(context, name string) error {
 	return nil
 }
 
-func (p *Podman) Run() error {
-	return nil
+func (p *Podman) Run(img string) (string, error) {
+	s := specgen.NewSpecGenerator(img, false)
+	createResponse, err := containers.CreateWithSpec(p.context, s, nil)
+	if err != nil {
+		return "", fmt.Errorf("creating container with sepc %v: %w", s, err)
+	}
+
+	if err := containers.Start(p.context, createResponse.ID, nil); err != nil {
+		return "", fmt.Errorf("starting container with sepc %v: %w", s, err)
+	}
+
+	return createResponse.ID, nil
 }
 
-// func (p *Podman) Build(file string) error {
-// 	fmt.Println("IN")
-// 	// logFile, err := os.Create(filepath.Join("tmp", "test-log-file.txt"))
-// 	// if err != nil {
-// 	// 	return err
-// 	// }
+func (p *Podman) Copy(id, src, dest string) error {
+	tmpArchName := "tmp.tar"
+	tmpArch, err := os.Create(filepath.Join(os.TempDir(), tmpArchName))
+	if err != nil {
+		return fmt.Errorf("creating podman log file: %w", err)
+	}
 
-// 	out, err := os.Create(filepath.Join("tmp", "test-out"))
-// 	if err != nil {
-// 		return fmt.Errorf("opening podman log file: %w", err)
-// 	}
+	defer os.RemoveAll(tmpArch.Name())
 
-// 	err1, err := os.Create(filepath.Join("tmp", "test-err"))
-// 	if err != nil {
-// 		return fmt.Errorf("opening podman log file: %w", err)
-// 	}
+	copyFunc, err := containers.CopyToArchive(p.context, id, src, tmpArch)
+	if err != nil {
+		return fmt.Errorf("creating copy function for archive from %s: %w", src, err)
+	}
 
-// 	report, err := os.Create(filepath.Join("tmp", "test-report"))
-// 	if err != nil {
-// 		return fmt.Errorf("opening podman log file: %w", err)
-// 	}
+	if err := copyFunc(); err != nil {
+		return fmt.Errorf("copying archive from %s to %s: %w", src, dest, err)
+	}
 
-// 	eOpts := entities.BuildOptions{
-// 		BuildOptions: define.BuildOptions{
-// 			// ContainerSuffix: "test",
-// 			// Registry:        "test-reg",
-// 			// Manifest:        "test-mani",
-// 			// Output:  "test-out",
-// 			// LogFile: logFile.Name(),
-// 			ContextDirectory: file,
-// 			AdditionalTags:   []string{"test"},
-// 			Output:           "test-out",
-// 			Out:              out,
-// 			Err:              err1,
-// 			ReportWriter:     report,
-// 		},
-// 	}
+	if err := untar(tmpArch.Name(), dest); err != nil {
+		return fmt.Errorf("extracting archive to %s: %w", dest, err)
+	}
 
-// 	fmt.Println(file)
-
-// 	_, err = images.Build(p.context, []string{"Dockerfile"}, eOpts)
-// 	if err != nil {
-// 		return fmt.Errorf("building image from Dockerfile %s: %w", file, err)
-// 	}
-
-// 	fmt.Println("OUT")
-
-// 	return nil
-// }
+	return nil
+}

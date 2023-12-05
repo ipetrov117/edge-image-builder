@@ -24,9 +24,16 @@ type Image struct {
 }
 
 type OperatingSystem struct {
-	KernelArgs []string              `yaml:"kernelArgs"`
-	Users      []OperatingSystemUser `yaml:"users"`
-	Systemd    Systemd               `yaml:"systemd"`
+	KernelArgs   []string              `yaml:"kernelArgs"`
+	Users        []OperatingSystemUser `yaml:"users"`
+	Systemd      Systemd               `yaml:"systemd"`
+	SUSEPackages SUSEPackages          `yaml:"susePackages"`
+}
+
+type SUSEPackages struct {
+	PKGList  []string `yaml:"pkgList"`
+	AddRepos []string `yaml:"additionalRepos"`
+	RegCode  string   `yaml:"regCode"`
 }
 
 type OperatingSystemUser struct {
