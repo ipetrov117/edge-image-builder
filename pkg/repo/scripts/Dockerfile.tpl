@@ -1,5 +1,7 @@
 FROM {{.BaseImage}}
 
+COPY {{.FromRPMPath}} {{.ToRPMPath}}
+
 RUN suseconnect -r {{.RegCode}}
 RUN SLE_SP=$(cat /etc/rpm/macros.sle | awk '/sle/ {print $2};' | cut -c4) && suseconnect -p PackageHub/15.$SLE_SP/x86_64
 RUN zypper ref

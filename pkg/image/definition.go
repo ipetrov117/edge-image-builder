@@ -24,13 +24,13 @@ type Image struct {
 }
 
 type OperatingSystem struct {
-	KernelArgs   []string              `yaml:"kernelArgs"`
-	Users        []OperatingSystemUser `yaml:"users"`
-	Systemd      Systemd               `yaml:"systemd"`
-	SUSEPackages SUSEPackages          `yaml:"susePackages"`
+	KernelArgs []string              `yaml:"kernelArgs"`
+	Users      []OperatingSystemUser `yaml:"users"`
+	Systemd    Systemd               `yaml:"systemd"`
+	Packages   Packages              `yaml:"packages"`
 }
 
-type SUSEPackages struct {
+type Packages struct {
 	PKGList  []string `yaml:"pkgList"`
 	AddRepos []string `yaml:"additionalRepos"`
 	RegCode  string   `yaml:"regCode"`

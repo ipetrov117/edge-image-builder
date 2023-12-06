@@ -14,7 +14,7 @@ const (
 )
 
 func setupAPIListener(out string) error {
-	cmd, logfile, err := createPodmanCommand(out)
+	cmd, logfile, err := preparePodmanCommand(out)
 	if err != nil {
 		return fmt.Errorf("configuring the podman system serice command: %w", err)
 	}
@@ -28,7 +28,7 @@ func setupAPIListener(out string) error {
 	return err
 }
 
-func createPodmanCommand(out string) (*exec.Cmd, *os.File, error) {
+func preparePodmanCommand(out string) (*exec.Cmd, *os.File, error) {
 	logFile, err := generatePodmanLogFile(podmanListenerLogFile, out)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating podman lister log file: %w", err)

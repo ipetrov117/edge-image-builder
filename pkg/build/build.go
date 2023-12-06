@@ -7,7 +7,7 @@ import (
 	"github.com/suse-edge/edge-image-builder/pkg/combustion"
 	"github.com/suse-edge/edge-image-builder/pkg/image"
 	"github.com/suse-edge/edge-image-builder/pkg/log"
-	"github.com/suse-edge/edge-image-builder/pkg/resolver"
+	"github.com/suse-edge/edge-image-builder/pkg/repo"
 )
 
 type configureCombustion func(ctx *image.Context) error
@@ -26,29 +26,11 @@ func New(ctx *image.Context) *Builder {
 
 func (b *Builder) Build() error {
 	log.Audit("Generating image customization components...")
-	// if err := podman.RunSystemService(b.context); err != nil {
-	// 	return fmt.Errorf("setting up podman: %w", err)
-	// }
-
-	// if err := podman.Connect(); err != nil {
-	// 	return fmt.Errorf("setting up podman connection: %w", err)
-	// }
-
-	// if err := b.buildInternalBaseImage(); err != nil {
-	// 	return fmt.Errorf("building internal image: %w", err)
-	// }
-
-	if _, err := resolver.Resolve(b.context); err != nil {
-	p, err := resolver.New(b.context)
+	repoPath, err := repo.Create(b.context)
 	if err != nil {
 		return err
 	}
-
-	r, err := p.Resolve()
-	if err != nil {
-		return err
-	}
-	fmt.Println(r)
+	fmt.Println(repoPath)
 
 	if err := b.configureCombustion(b.context); err != nil {
 		return fmt.Errorf("configuring combustion: %w", err)
