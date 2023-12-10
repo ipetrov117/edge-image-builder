@@ -1,17 +1,23 @@
 FROM {{.BaseImage}}
 
-COPY {{.FromRPMPath}} {{.ToRPMPath}}
+{{ if and (ne .FromRPMPath "") (ne .ToRPMPath "") -}}
+COPY {{ .FromRPMPath }} {{ .ToRPMPath -}}
+{{ end }}
 
+{{ if ne .RegCode "" -}}
 RUN suseconnect -r {{.RegCode}}
 RUN SLE_SP=$(cat /etc/rpm/macros.sle | awk '/sle/ {print $2};' | cut -c4) && suseconnect -p PackageHub/15.$SLE_SP/x86_64
 RUN zypper ref
+{{ end }}
 
+{{ if ne .AddRepo "" -}}
 RUN counter=1 && \
     for i in "{{.AddRepo}}"; \
     do \
       zypper ar --no-gpgcheck -f $i addrepo$counter; \
       counter=$((counter+1)); \
     done
+{{ end }}
 
 RUN zypper \
     --pkg-cache-dir {{.CacheDir}} \ 

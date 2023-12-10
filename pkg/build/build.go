@@ -7,7 +7,6 @@ import (
 	"github.com/suse-edge/edge-image-builder/pkg/combustion"
 	"github.com/suse-edge/edge-image-builder/pkg/image"
 	"github.com/suse-edge/edge-image-builder/pkg/log"
-	"github.com/suse-edge/edge-image-builder/pkg/repo"
 )
 
 type configureCombustion func(ctx *image.Context) error
@@ -26,11 +25,6 @@ func New(ctx *image.Context) *Builder {
 
 func (b *Builder) Build() error {
 	log.Audit("Generating image customization components...")
-	repoPath, err := repo.Create(b.context)
-	if err != nil {
-		return err
-	}
-	fmt.Println(repoPath)
 
 	if err := b.configureCombustion(b.context); err != nil {
 		return fmt.Errorf("configuring combustion: %w", err)
