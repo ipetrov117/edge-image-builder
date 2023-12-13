@@ -10,12 +10,15 @@ import (
 	"github.com/suse-edge/edge-image-builder/pkg/fileio"
 	"github.com/suse-edge/edge-image-builder/pkg/image"
 	"github.com/suse-edge/edge-image-builder/pkg/podman"
+	"github.com/suse-edge/edge-image-builder/pkg/rpm"
 	"github.com/suse-edge/edge-image-builder/pkg/template"
+	"go.uber.org/zap"
 )
 
 const (
 	resolverImageRef = "pkg-resolver"
 	dockerfileName   = "Dockerfile"
+	rpmRepoName      = "rpm-repo"
 )
 
 //go:embed scripts/Dockerfile.tpl
@@ -27,31 +30,39 @@ type Resolver struct {
 	packages     *image.Packages
 	customRPMDir string
 	podman       *podman.Podman
-	rpmNames     []string
+	rpms         []string
 }
 
-func New(dir, usrImg, rpmDir string, packages *image.Packages) (*Resolver, error) {
-	p, err := podman.New(dir)
-	if err != nil {
-		return nil, fmt.Errorf("starting podman client: %w", err)
-	}
-
-	resolverDir := filepath.Join(dir, "resolver")
+func New(ctx *image.Context) (*Resolver, error) {
+	resolverDir := filepath.Join(ctx.BuildDir, "resolver")
 	if err := os.MkdirAll(resolverDir, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("creating %s dir: %w", resolverDir, err)
 	}
 
-	resolver := &Resolver{
-		dir:          resolverDir,
-		imgPath:      usrImg, //filepath.Join(ctx.ImageConfigDir, "images", ctx.ImageDefinition.Image.BaseImage),
-		packages:     packages,
-		podman:       p,
-		customRPMDir: rpmDir,
+	p, err := podman.New(resolverDir)
+	if err != nil {
+		return nil, fmt.Errorf("starting podman client: %w", err)
 	}
-	return resolver, nil
+
+	rpmPath := filepath.Join(ctx.ImageConfigDir, "rpms")
+	if _, err := os.Stat(rpmPath); os.IsNotExist(err) {
+		rpmPath = ""
+	} else if err != nil {
+		return nil, fmt.Errorf("validating rpm dir exists: %w", err)
+	}
+
+	return &Resolver{
+		dir:          resolverDir,
+		imgPath:      filepath.Join(ctx.ImageConfigDir, "images", ctx.ImageDefinition.Image.BaseImage),
+		packages:     &ctx.ImageDefinition.OperatingSystem.Packages,
+		podman:       p,
+		customRPMDir: rpmPath,
+	}, nil
 }
 
 func (r *Resolver) Resolve(out string) (string, []string, error) {
+	zap.L().Info("Resolving package dependencies...")
+
 	if err := r.buildBase(); err != nil {
 		return "", nil, fmt.Errorf("building base resolver image: %w", err)
 	}
@@ -74,12 +85,14 @@ func (r *Resolver) Resolve(out string) (string, []string, error) {
 		return "", nil, fmt.Errorf("copying resolved pkg cache to %s: %w", out, err)
 	}
 
-	return filepath.Base(r.generateRPMRepoPath()), r.generateReadyToUsePKGList(), nil
+	return filepath.Join(out, rpmRepoName), r.getPKGInstallList(), nil
 }
 
 func (r *Resolver) prepare() error {
+	zap.L().Info("Preparing resolver image context...")
+
 	buildContext := r.generateBuildContextPath()
-	if err := os.MkdirAll(buildContext, fileio.NonExecutablePerms); err != nil {
+	if err := os.MkdirAll(buildContext, os.ModePerm); err != nil {
 		return fmt.Errorf("creating build context dir %s: %w", buildContext, err)
 	}
 
@@ -89,17 +102,18 @@ func (r *Resolver) prepare() error {
 			return fmt.Errorf("creating rpm directory in resolver dir: %w", err)
 		}
 
-		rpmNames, err := copyRPMs(r.customRPMDir, dest)
+		rpmNames, err := rpm.CopyRPMs(r.customRPMDir, dest)
 		if err != nil {
 			return fmt.Errorf("copying local rpms to %s: %w", dest, err)
 		}
-		r.rpmNames = rpmNames
+		r.rpms = rpmNames
 	}
 
 	if err := r.writeDockerfile(); err != nil {
 		return fmt.Errorf("writing dockerfile: %w", err)
 	}
 
+	zap.L().Info("Resolver image context setup successful")
 	return nil
 }
 
@@ -117,12 +131,12 @@ func (r *Resolver) writeDockerfile() error {
 		RegCode:   r.packages.RegCode,
 		AddRepo:   strings.Join(r.packages.AddRepos, " "),
 		CacheDir:  r.generateRPMRepoPath(),
-		PkgList:   strings.Join(r.generateInstallationPKGList(), " "),
+		PkgList:   strings.Join(r.getPKGForResolve(), " "),
 	}
 
 	if r.customRPMDir != "" {
 		values.FromRPMPath = filepath.Base(r.generateRPMPathInBuildContext())
-		values.ToRPMPath = r.generateLocalRPMPath()
+		values.ToRPMPath = r.generateLocalRPMDirPath()
 	}
 
 	data, err := template.Parse(dockerfileName, dockerfileTemplate, &values)
@@ -138,28 +152,32 @@ func (r *Resolver) writeDockerfile() error {
 	return nil
 }
 
-func (r *Resolver) generateInstallationPKGList() []string {
+func (r *Resolver) getPKGForResolve() []string {
 	list := []string{}
 
 	if len(r.packages.PKGList) > 0 {
 		list = append(list, r.packages.PKGList...)
 	}
 
-	for _, name := range r.rpmNames {
-		list = append(list, filepath.Join(r.generateLocalRPMPath(), name))
+	if len(r.rpms) > 0 {
+		for _, name := range r.rpms {
+			list = append(list, filepath.Join(r.generateLocalRPMDirPath(), name))
+		}
 	}
 	return list
 }
 
-func (r *Resolver) generateReadyToUsePKGList() []string {
+func (r *Resolver) getPKGInstallList() []string {
 	list := []string{}
 
 	if len(r.packages.PKGList) > 0 {
 		list = append(list, r.packages.PKGList...)
 	}
 
-	for _, name := range r.rpmNames {
-		list = append(list, strings.TrimSuffix(name, filepath.Ext(name)))
+	if len(r.rpms) > 0 {
+		for _, name := range r.rpms {
+			list = append(list, strings.TrimSuffix(name, filepath.Ext(name)))
+		}
 	}
 	return list
 }
@@ -173,33 +191,9 @@ func (r *Resolver) generateRPMPathInBuildContext() string {
 }
 
 func (r *Resolver) generateRPMRepoPath() string {
-	return filepath.Join(os.TempDir(), "rpm-repo")
+	return filepath.Join(os.TempDir(), rpmRepoName)
 }
 
-func (r *Resolver) generateLocalRPMPath() string {
+func (r *Resolver) generateLocalRPMDirPath() string {
 	return filepath.Join(r.generateRPMRepoPath(), "local")
-}
-
-func copyRPMs(rpmSourceDir string, rpmDestDir string) ([]string, error) {
-	list := []string{}
-
-	rpms, err := os.ReadDir(rpmSourceDir)
-	if err != nil {
-		return nil, fmt.Errorf("reading RPM source dir: %w", err)
-	}
-
-	for _, rpm := range rpms {
-		if filepath.Ext(rpm.Name()) == ".rpm" {
-			sourcePath := filepath.Join(rpmSourceDir, rpm.Name())
-			destPath := filepath.Join(rpmDestDir, rpm.Name())
-
-			err := fileio.CopyFile(sourcePath, destPath, fileio.NonExecutablePerms)
-			if err != nil {
-				return nil, fmt.Errorf("copying file %s: %w", sourcePath, err)
-			}
-			list = append(list, rpm.Name())
-		}
-	}
-
-	return list, nil
 }

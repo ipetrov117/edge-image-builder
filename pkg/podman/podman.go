@@ -12,6 +12,7 @@ import (
 	"github.com/containers/podman/v4/pkg/bindings/images"
 	"github.com/containers/podman/v4/pkg/domain/entities"
 	"github.com/containers/podman/v4/pkg/specgen"
+	"go.uber.org/zap"
 )
 
 const (
@@ -50,6 +51,7 @@ func New(out string) (*Podman, error) {
 }
 
 func (p *Podman) Import(tarball, ref string) (*entities.ImageImportReport, error) {
+	zap.L().Sugar().Infof("Importing image '%s' from tarball...", ref)
 	f, err := os.Open(tarball)
 	if err != nil {
 		return nil, fmt.Errorf("opening tarball %s: %w", tarball, err)
@@ -63,6 +65,7 @@ func (p *Podman) Import(tarball, ref string) (*entities.ImageImportReport, error
 }
 
 func (p *Podman) Build(context, name string) error {
+	zap.L().Sugar().Infof("Building image %s...", name)
 	logFile, err := generatePodmanLogFile(podmanBuildLogFile, p.out)
 	if err != nil {
 		return fmt.Errorf("generating podman build log file: %w", err)
@@ -86,6 +89,8 @@ func (p *Podman) Build(context, name string) error {
 }
 
 func (p *Podman) Run(img string) (string, error) {
+	zap.L().Sugar().Infof("Running container from %s image...", img)
+
 	s := specgen.NewSpecGenerator(img, false)
 	createResponse, err := containers.CreateWithSpec(p.context, s, nil)
 	if err != nil {
@@ -100,6 +105,8 @@ func (p *Podman) Run(img string) (string, error) {
 }
 
 func (p *Podman) Copy(id, src, dest string) error {
+	zap.L().Sugar().Infof("Copying %s from container %s to %s", src, id, dest)
+
 	tmpArchName := "tmp.tar"
 	tmpArch, err := os.Create(filepath.Join(os.TempDir(), tmpArchName))
 	if err != nil {

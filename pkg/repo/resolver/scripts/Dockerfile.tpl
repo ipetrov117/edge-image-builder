@@ -12,7 +12,7 @@ RUN zypper ref
 
 {{ if ne .AddRepo "" -}}
 RUN counter=1 && \
-    for i in "{{.AddRepo}}"; \
+    for i in {{.AddRepo}}; \
     do \
       zypper ar --no-gpgcheck -f $i addrepo$counter; \
       counter=$((counter+1)); \
@@ -31,6 +31,8 @@ RUN zypper \
 
 RUN touch {{.CacheDir}}/zypper-success
 
+{{ if ne .RegCode "" -}}
 RUN suseconnect -d
+{{ end }}
 
 CMD [ "sleep", "60m" ]

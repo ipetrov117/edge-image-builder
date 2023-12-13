@@ -4,15 +4,14 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/suse-edge/edge-image-builder/pkg/fileio"
 	"github.com/suse-edge/edge-image-builder/pkg/image"
 	"github.com/suse-edge/edge-image-builder/pkg/log"
-	"github.com/suse-edge/edge-image-builder/pkg/resolver"
+	"github.com/suse-edge/edge-image-builder/pkg/repo"
+	"github.com/suse-edge/edge-image-builder/pkg/rpm"
 	"github.com/suse-edge/edge-image-builder/pkg/template"
 	"go.uber.org/zap"
 )
@@ -22,37 +21,40 @@ const (
 	modifyRPMScriptName = "10-rpm-install.sh"
 	rpmComponentName    = "RPM"
 	combustionBasePath  = "/dev/shm/combustion/config"
-	createRepoExec      = "/usr/bin/createrepo"
-	createRepoLog       = "createrepo-%s.log"
 )
 
 //go:embed templates/10-rpm-install.sh.tpl
 var modifyRPMScript string
 
 func configureRPMs(ctx *image.Context) ([]string, error) {
-	if !isComponentConfigured(ctx, userRPMsDir) {
+	if skipRPMconfigre(ctx) {
 		log.AuditComponentSkipped(rpmComponentName)
+		zap.L().Info("Skipping RPM component. Configuration is not provided")
 		return nil, nil
 	}
 
-	// rpmSourceDir := generateComponentPath(ctx, userRPMsDir)
-
-	res, err := resolver.New(ctx.BuildDir, filepath.Join(ctx.ImageConfigDir, "images", ctx.ImageDefinition.Image.BaseImage), "", &ctx.ImageDefinition.OperatingSystem.Packages)
-	if err != nil {
-		return nil, fmt.Errorf("preparing resolver: %w", err)
+	zap.L().Info("Configuring RPM component...")
+	var repoName string
+	var packages []string
+	if isResolutionNeeded(ctx) {
+		zap.L().Info("Begining package dependency resolution...")
+		repoPath, pkgList, err := repo.Create(ctx, ctx.CombustionDir)
+		if err != nil {
+			log.AuditComponentFailed(rpmComponentName)
+			return nil, fmt.Errorf("creating rpm repository: %w", err)
+		}
+		repoName = filepath.Base(repoPath)
+		packages = pkgList
+	} else {
+		rpms, err := rpm.CopyRPMs(generateComponentPath(ctx, userRPMsDir), ctx.CombustionDir)
+		if err != nil {
+			log.AuditComponentFailed(rpmComponentName)
+			return nil, fmt.Errorf("moving single rpm files: %w", err)
+		}
+		packages = rpms
 	}
 
-	repoName, pkgList, err := res.Resolve(ctx.CombustionDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolving package dependencies: %w", err)
-	}
-
-	repoPath := filepath.Join(ctx.CombustionDir, repoName)
-	if err := createRPMRepo(repoPath, ctx.BuildDir); err != nil {
-		return nil, fmt.Errorf("creating rpm repo from %s: %w", repoPath, err)
-	}
-
-	script, err := writeRPMScript(ctx, repoName, pkgList)
+	script, err := writeRPMScript(ctx, repoName, packages)
 	if err != nil {
 		log.AuditComponentFailed(rpmComponentName)
 		return nil, fmt.Errorf("writing the RPM install script %s: %w", modifyRPMScriptName, err)
@@ -87,75 +89,43 @@ func writeRPMScript(ctx *image.Context, repoName string, pkgList []string) (stri
 	return modifyRPMScriptName, nil
 }
 
-func createRPMRepo(path, logOut string) error {
-	cmd, logfile, err := prepareRepoCommand(path, logOut)
-	if err != nil {
-		return fmt.Errorf("preparing createrepo command: %w", err)
-	}
-	defer logfile.Close()
+func skipRPMconfigre(ctx *image.Context) bool {
+	pkg := ctx.ImageDefinition.OperatingSystem.Packages
 
-	err = cmd.Run()
-	if err != nil {
-		return fmt.Errorf("error running createrepo: %w", err)
+	// rpm from third party repo
+	if isComponentConfigured(ctx, userRPMsDir) && len(pkg.AddRepos) > 0 {
+		return false
+	} else if isComponentConfigured(ctx, userRPMsDir) {
+		// standalone rpm
+		return false
 	}
 
-	return err
+	// package from PackageHub
+	if len(pkg.PKGList) > 0 && pkg.RegCode != "" {
+		return false
+	}
+
+	// third party pacakge
+	if len(pkg.AddRepos) > 0 && len(pkg.PKGList) > 0 {
+		return false
+	}
+
+	return true
 }
 
-func prepareRepoCommand(path, logOut string) (*exec.Cmd, *os.File, error) {
-	logFile, err := generateCreateRepoLog(logOut)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generating createrepo log file: %w", err)
+func isResolutionNeeded(ctx *image.Context) bool {
+	pkg := ctx.ImageDefinition.OperatingSystem.Packages
+
+	// check if no:
+	// 1. packages from PackageHub are provided
+	// 2. third party packges are provided
+	// 3. no third party repos for rpms are provided
+	if len(pkg.PKGList) > 0 && pkg.RegCode != "" {
+		return true
+	} else if len(pkg.AddRepos) > 0 && len(pkg.PKGList) > 0 {
+		return true
+	} else if len(pkg.AddRepos) > 0 {
+		return true
 	}
-
-	cmd := exec.Command(createRepoExec, path)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-
-	return cmd, logFile, nil
-}
-
-func generateCreateRepoLog(out string) (*os.File, error) {
-	timestamp := time.Now().Format("Jan02_15-04-05")
-	filename := fmt.Sprintf(createRepoLog, timestamp)
-	logFilename := filepath.Join(out, filename)
-
-	logFile, err := os.Create(logFilename)
-	if err != nil {
-		return nil, fmt.Errorf("creating log file: %w", err)
-	}
-	zap.L().Sugar().Debugf("log file created: %s", logFilename)
-
-	return logFile, err
-}
-
-func needsResolution(pkg *image.Packages, rpmDir string) (bool, error) {
-	rpmDirExists, err := dirExists(rpmDir)
-	if err != nil {
-		return false, fmt.Errorf("checking if rpm dir exists: %w", err)
-	}
-
-	// confiugred package list with either a third repo or registration code is provided
-	if len(pkg.PKGList) > 0 && (len(pkg.AddRepos) > 0 || pkg.RegCode != "") {
-		return true, nil
-	}
-
-	// rpm dir exists and either a third party repo or a registrtation code is provided
-	if rpmDirExists && (len(pkg.AddRepos) > 0 || pkg.RegCode != "") {
-		return true, nil
-	}
-
-	return false, nil
-
-}
-
-func dirExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("describing file at %s: %w", path, err)
-	}
-	return true, nil
+	return false
 }

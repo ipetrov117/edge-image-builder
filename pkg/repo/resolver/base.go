@@ -9,6 +9,7 @@ import (
 
 	"github.com/suse-edge/edge-image-builder/pkg/fileio"
 	"github.com/suse-edge/edge-image-builder/pkg/template"
+	"go.uber.org/zap"
 )
 
 const (
@@ -21,6 +22,8 @@ const (
 var prepareBaseTemplate string
 
 func (r *Resolver) buildBase() error {
+	zap.L().Info("Building base resolver image...")
+
 	defer os.RemoveAll(r.getBaseImgDir())
 	if err := r.prepareBase(); err != nil {
 		return fmt.Errorf("preparing base image env: %w", err)
@@ -42,6 +45,7 @@ func (r *Resolver) buildBase() error {
 		return fmt.Errorf("importing the base image: %w", err)
 	}
 
+	zap.L().Info("Base resolver image build successful")
 	return nil
 }
 
