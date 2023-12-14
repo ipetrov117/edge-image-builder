@@ -1,3 +1,11 @@
+#  Template Fields
+#  BaseImage   - image to use as base for this dockerfile
+#  FromRPMPath - path to the custom RPM directory relative to the EIB container
+#  ToRPMPath   - path to the custom RPM directory relative to the resolver image
+#  RegCode     - scc.suse.com registration code
+#  AddRepo     - additional third-party repositories that will be used in the resolution process
+#  CacheDir    - zypper cache directory where all rpm dependencies will be downloaded to
+#  PkgList     - list of packages for which to do the dependency resolution
 FROM {{.BaseImage}}
 
 {{ if and (ne .FromRPMPath "") (ne .ToRPMPath "") -}}

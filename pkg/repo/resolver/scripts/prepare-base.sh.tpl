@@ -1,11 +1,29 @@
 #!/bin/bash
 set -euo pipefail
 
-INTERNAL_IMAGE_DIR={{.BaseImageDir}}
-BASE_ISO_PATH={{.BaseISOPath}}
+#  Template Fields
+#  WorkDir     - directory from where this script will be running
+#  ImgPath     - path to the image that will be prepared
+#  ImgType     - type of the image (either .iso, or .raw)
+#  ArchiveName - name of the virtual disk archive that will be created from this image
 
-xorriso -osirrox on -indev $BASE_ISO_PATH extract / $INTERNAL_IMAGE_DIR/iso-root/
-cd $INTERNAL_IMAGE_DIR/iso-root/
-unsquashfs $INTERNAL_IMAGE_DIR/iso-root/SLE-Micro.raw.squashfs
-cd $INTERNAL_IMAGE_DIR/iso-root/squashfs-root
-virt-tar-out -a SLE-Micro.raw / - | gzip --best > $INTERNAL_IMAGE_DIR/{{.ArchiveName}}
+WORK_DIR={{.WorkDir}}
+IMG_PATH={{.ImgPath}}
+
+{{ if eq .ImgType "iso" -}}
+xorriso -osirrox on -indev $IMG_PATH extract / $WORK_DIR/iso-root/
+
+ISO_ROOT=$WORK_DIR/iso-root/
+cd $ISO_ROOT
+
+ISO_SQUASHFS=`find $ISO_ROOT -name "*.squashfs"`
+unsquashfs $ISO_SQUASHFS 
+
+UNSQUASHFS_DIR=$WORK_DIR/iso-root/squashfs-root
+cd $UNSQUASHFS_DIR
+
+RAW_FILE=`find $UNSQUASHFS_DIR -name "*.raw"`
+virt-tar-out -a $RAW_FILE / - | gzip --best > $WORK_DIR/{{.ArchiveName}}
+{{ else }}
+virt-tar-out -a $IMG_PATH / - | gzip --best > $WORK_DIR/{{.ArchiveName}}
+{{ end }}

@@ -55,9 +55,8 @@ func (r *Resolver) prepareBase() error {
 		return fmt.Errorf("creating %s dir: %w", baseImgDir, err)
 	}
 
-	originalImgPath := filepath.Join(r.imgPath)
-	if err := fileio.CopyFile(originalImgPath, r.getBaseISOCopyPath(), fileio.NonExecutablePerms); err != nil {
-		return fmt.Errorf("creating work copy of image %s in repo work dir %s: %w", originalImgPath, baseImgDir, err)
+	if err := fileio.CopyFile(r.ImgPath, r.getBaseISOCopyPath(), fileio.NonExecutablePerms); err != nil {
+		return fmt.Errorf("creating work copy of image %s in repo work dir %s: %w", r.ImgPath, baseImgDir, err)
 	}
 
 	return nil
@@ -65,13 +64,15 @@ func (r *Resolver) prepareBase() error {
 
 func (r *Resolver) writeBaseImageScript() error {
 	values := struct {
-		BaseImageDir string
-		BaseISOPath  string
-		ArchiveName  string
+		WorkDir     string
+		ImgPath     string
+		ArchiveName string
+		ImgType     string
 	}{
-		BaseImageDir: r.getBaseImgDir(),
-		BaseISOPath:  r.getBaseISOCopyPath(),
-		ArchiveName:  baseImageArchiveName,
+		WorkDir:     r.getBaseImgDir(),
+		ImgPath:     r.getBaseISOCopyPath(),
+		ArchiveName: baseImageArchiveName,
+		ImgType:     r.ImgType,
 	}
 
 	data, err := template.Parse(prepareBaseScriptName, prepareBaseTemplate, &values)
@@ -79,7 +80,7 @@ func (r *Resolver) writeBaseImageScript() error {
 		return fmt.Errorf("parsing %s template: %w", prepareBaseScriptName, err)
 	}
 
-	filename := filepath.Join(r.dir, prepareBaseScriptName)
+	filename := filepath.Join(r.Dir, prepareBaseScriptName)
 	if err = os.WriteFile(filename, []byte(data), fileio.ExecutablePerms); err != nil {
 		return fmt.Errorf("writing prepare base image script %s: %w", filename, err)
 	}
@@ -88,15 +89,15 @@ func (r *Resolver) writeBaseImageScript() error {
 }
 
 func (r *Resolver) prepareBaseImageCmd() *exec.Cmd {
-	scriptPath := filepath.Join(r.dir, prepareBaseScriptName)
+	scriptPath := filepath.Join(r.Dir, prepareBaseScriptName)
 	cmd := exec.Command(scriptPath)
 	return cmd
 }
 
 func (r *Resolver) getBaseImgDir() string {
-	return filepath.Join(r.dir, "base-image")
+	return filepath.Join(r.Dir, "base-image")
 }
 
 func (r *Resolver) getBaseISOCopyPath() string {
-	return filepath.Join(r.getBaseImgDir(), filepath.Base(r.imgPath))
+	return filepath.Join(r.getBaseImgDir(), filepath.Base(r.ImgPath))
 }

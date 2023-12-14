@@ -2,7 +2,9 @@
 set -euo pipefail
 
 #  Template Fields
-#  RPMs - A string that contains all of the RPMs present in the user created config directory, separated by spaces.
+#  RepoName - name of the air-gapped repository
+#  RepoPath - path to the airgapped repository relative to the combustion dir in the image
+#  PKGList  - list of packages that will be installed
 
 {{ if ne .RepoName "" -}}
 zypper ar file://{{.RepoPath}} {{.RepoName}}

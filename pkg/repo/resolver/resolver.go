@@ -25,14 +25,23 @@ const (
 var dockerfileTemplate string
 
 type Resolver struct {
-	dir          string
-	imgPath      string
-	packages     *image.Packages
-	customRPMDir string
-	podman       *podman.Podman
-	rpms         []string
+	// dir from where the resolver will work
+	Dir string
+	// path to image that the resolver will use as base
+	ImgPath string
+	// type of image that will be used as base
+	ImgType string
+	// packages for which dependency resolution will be done
+	Packages *image.Packages
+	// directory containing additional rpms for which dependency resolution will be done
+	CustomRPMDir string
+	// podman client
+	podman *podman.Podman
+	// hepler property, contains the names of the rpms that have been taken from the customRPMDir
+	rpms []string
 }
 
+// New creates a new Resolver instance that is based on the image context provided by the user
 func New(ctx *image.Context) (*Resolver, error) {
 	resolverDir := filepath.Join(ctx.BuildDir, "resolver")
 	if err := os.MkdirAll(resolverDir, os.ModePerm); err != nil {
@@ -52,14 +61,21 @@ func New(ctx *image.Context) (*Resolver, error) {
 	}
 
 	return &Resolver{
-		dir:          resolverDir,
-		imgPath:      filepath.Join(ctx.ImageConfigDir, "images", ctx.ImageDefinition.Image.BaseImage),
-		packages:     &ctx.ImageDefinition.OperatingSystem.Packages,
+		Dir:          resolverDir,
+		ImgPath:      filepath.Join(ctx.ImageConfigDir, "images", ctx.ImageDefinition.Image.BaseImage),
+		ImgType:      ctx.ImageDefinition.Image.ImageType,
+		Packages:     &ctx.ImageDefinition.OperatingSystem.Packages,
 		podman:       p,
-		customRPMDir: rpmPath,
+		CustomRPMDir: rpmPath,
 	}, nil
 }
 
+// Resolve resolves all dependencies for the packages and third party rpms that have been configured by the user in the image context.
+// It then outputs the set of resolved rpms to a directory from which an RPM repository can be created. Returns the full path to the created
+// directory, the package/rpm names for which dependency resolution has been done, any errors have occured.
+//
+// Parameters:
+//   - out - location where the RPM directory will be created
 func (r *Resolver) Resolve(out string) (string, []string, error) {
 	zap.L().Info("Resolving package dependencies...")
 
@@ -96,13 +112,13 @@ func (r *Resolver) prepare() error {
 		return fmt.Errorf("creating build context dir %s: %w", buildContext, err)
 	}
 
-	if r.customRPMDir != "" {
+	if r.CustomRPMDir != "" {
 		dest := r.generateRPMPathInBuildContext()
 		if err := os.MkdirAll(dest, os.ModePerm); err != nil {
 			return fmt.Errorf("creating rpm directory in resolver dir: %w", err)
 		}
 
-		rpmNames, err := rpm.CopyRPMs(r.customRPMDir, dest)
+		rpmNames, err := rpm.CopyRPMs(r.CustomRPMDir, dest)
 		if err != nil {
 			return fmt.Errorf("copying local rpms to %s: %w", dest, err)
 		}
@@ -128,13 +144,13 @@ func (r *Resolver) writeDockerfile() error {
 		ToRPMPath   string
 	}{
 		BaseImage: baseImageRef,
-		RegCode:   r.packages.RegCode,
-		AddRepo:   strings.Join(r.packages.AddRepos, " "),
+		RegCode:   r.Packages.RegCode,
+		AddRepo:   strings.Join(r.Packages.AddRepos, " "),
 		CacheDir:  r.generateRPMRepoPath(),
 		PkgList:   strings.Join(r.getPKGForResolve(), " "),
 	}
 
-	if r.customRPMDir != "" {
+	if r.CustomRPMDir != "" {
 		values.FromRPMPath = filepath.Base(r.generateRPMPathInBuildContext())
 		values.ToRPMPath = r.generateLocalRPMDirPath()
 	}
@@ -155,8 +171,8 @@ func (r *Resolver) writeDockerfile() error {
 func (r *Resolver) getPKGForResolve() []string {
 	list := []string{}
 
-	if len(r.packages.PKGList) > 0 {
-		list = append(list, r.packages.PKGList...)
+	if len(r.Packages.PKGList) > 0 {
+		list = append(list, r.Packages.PKGList...)
 	}
 
 	if len(r.rpms) > 0 {
@@ -170,8 +186,8 @@ func (r *Resolver) getPKGForResolve() []string {
 func (r *Resolver) getPKGInstallList() []string {
 	list := []string{}
 
-	if len(r.packages.PKGList) > 0 {
-		list = append(list, r.packages.PKGList...)
+	if len(r.Packages.PKGList) > 0 {
+		list = append(list, r.Packages.PKGList...)
 	}
 
 	if len(r.rpms) > 0 {
@@ -183,7 +199,7 @@ func (r *Resolver) getPKGInstallList() []string {
 }
 
 func (r *Resolver) generateBuildContextPath() string {
-	return filepath.Join(r.dir, "build")
+	return filepath.Join(r.Dir, "build")
 }
 
 func (r *Resolver) generateRPMPathInBuildContext() string {

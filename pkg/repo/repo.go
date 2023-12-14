@@ -17,9 +17,10 @@ const (
 	createRepoLog  = "createrepo-%s.log"
 )
 
+// Create creates an RPM repository consisting of the packages/rpms provided
+// by the user in the image context and their dependencies. Returns the path
+// to the repository and a list of packages that are ready to be installed.
 func Create(ctx *image.Context, out string) (string, []string, error) {
-	zap.L().Info("Creating RPM repository...")
-
 	reslv, err := resolver.New(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("initializing resolver: %w", err)
@@ -30,6 +31,7 @@ func Create(ctx *image.Context, out string) (string, []string, error) {
 		return "", nil, fmt.Errorf("resolving package dependencies: %w", err)
 	}
 
+	zap.L().Sugar().Infof("Creating RPM repository from '%s'", path)
 	if err := createRPMRepo(path, ctx.BuildDir); err != nil {
 		return "", nil, fmt.Errorf("creating rpm repository: %w", err)
 	}
