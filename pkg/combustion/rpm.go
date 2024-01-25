@@ -16,6 +16,7 @@ import (
 
 const (
 	userRPMsDir         = "rpms"
+	userGPGsDir         = "gpg-keys"
 	modifyRPMScriptName = "10-rpm-install.sh"
 	rpmComponentName    = "RPM"
 )
@@ -32,13 +33,25 @@ func configureRPMs(ctx *image.Context) ([]string, error) {
 
 	zap.L().Info("Configuring RPM component...")
 
-	var rpmDir string
+	var localRPMConfig *image.LocalRPMConfig
 	if isComponentConfigured(ctx, userRPMsDir) {
-		rpmDir = generateComponentPath(ctx, userRPMsDir)
+		rpmDir := generateComponentPath(ctx, userRPMsDir)
+		localRPMConfig = &image.LocalRPMConfig{
+			LocalPackagesPath: rpmDir,
+		}
+
+		gpgPath := filepath.Join(rpmDir, userGPGsDir)
+		_, err := os.Stat(gpgPath)
+		if err == nil {
+			localRPMConfig.GPGKeysPath = gpgPath
+		} else if err != nil && !os.IsNotExist(err) {
+			log.AuditComponentFailed(rpmComponentName)
+			return nil, fmt.Errorf("describing GPG directory at '%s': %w", gpgPath, err)
+		}
 	}
 
 	log.Audit("Resolving package dependencies...")
-	repoPath, packages, err := ctx.RPMResolver.Resolve(&ctx.ImageDefinition.OperatingSystem.Packages, rpmDir, ctx.CombustionDir)
+	repoPath, packages, err := ctx.RPMResolver.Resolve(&ctx.ImageDefinition.OperatingSystem.Packages, localRPMConfig, ctx.CombustionDir)
 	if err != nil {
 		log.AuditComponentFailed(rpmComponentName)
 		return nil, fmt.Errorf("resolving rpm/package dependencies: %w", err)
