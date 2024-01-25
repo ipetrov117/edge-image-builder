@@ -60,17 +60,17 @@ func New(workDir, imgPath, imgType string, podman Podman) *Resolver {
 // Parameters:
 // - packages - pacakge configuration
 //
-// - localPackagesPath - path to a directory containing local rpm packages. Will not be considered if left empty.
+// - localRPMConfig - configuration for local rpms
 //
 // - outputDir - directory in which the resolver will create a directory containing the resolved rpms.
-func (r *Resolver) Resolve(packages *image.Packages, localPackagesPath, outputDir string) (rpmDirPath string, pkgList []string, err error) {
+func (r *Resolver) Resolve(packages *image.Packages, localRPMConfig *image.LocalRPMConfig, outputDir string) (rpmDirPath string, pkgList []string, err error) {
 	zap.L().Info("Resolving package dependencies...")
 
 	if err = r.buildBase(); err != nil {
 		return "", nil, fmt.Errorf("building base resolver image: %w", err)
 	}
 
-	if err = r.prepare(localPackagesPath, packages); err != nil {
+	if err = r.prepare(localRPMConfig, packages); err != nil {
 		return "", nil, fmt.Errorf("generating context for the resolver image: %w", err)
 	}
 
@@ -94,7 +94,7 @@ func (r *Resolver) Resolve(packages *image.Packages, localPackagesPath, outputDi
 	return filepath.Join(outputDir, rpmRepoName), r.getPKGInstallList(packages), nil
 }
 
-func (r *Resolver) prepare(localPackagesPath string, packages *image.Packages) error {
+func (r *Resolver) prepare(localRPMConfig *image.LocalRPMConfig, packages *image.Packages) error {
 	zap.L().Info("Preparing resolver image context...")
 
 	buildContext := r.generateBuildContextPath()
@@ -102,20 +102,20 @@ func (r *Resolver) prepare(localPackagesPath string, packages *image.Packages) e
 		return fmt.Errorf("creating build context dir %s: %w", buildContext, err)
 	}
 
-	if localPackagesPath != "" {
+	if localRPMConfig.LocalPackagesPath != "" {
 		dest := r.generateRPMPathInBuildContext()
 		if err := os.MkdirAll(dest, os.ModePerm); err != nil {
 			return fmt.Errorf("creating rpm directory in resolver dir: %w", err)
 		}
 
-		rpmNames, err := rpm.CopyRPMs(localPackagesPath, dest)
+		rpmNames, err := rpm.CopyRPMs(localRPMConfig.LocalPackagesPath, dest)
 		if err != nil {
 			return fmt.Errorf("copying local rpms to %s: %w", dest, err)
 		}
 		r.rpms = rpmNames
 	}
 
-	if err := r.writeDockerfile(localPackagesPath, packages); err != nil {
+	if err := r.writeDockerfile(localRPMConfig.LocalPackagesPath, packages); err != nil {
 		return fmt.Errorf("writing dockerfile: %w", err)
 	}
 
