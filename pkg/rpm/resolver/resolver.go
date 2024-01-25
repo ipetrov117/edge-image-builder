@@ -9,7 +9,6 @@ import (
 
 	"github.com/suse-edge/edge-image-builder/pkg/fileio"
 	"github.com/suse-edge/edge-image-builder/pkg/image"
-	"github.com/suse-edge/edge-image-builder/pkg/rpm"
 	"github.com/suse-edge/edge-image-builder/pkg/template"
 	"go.uber.org/zap"
 )
@@ -18,6 +17,7 @@ const (
 	resolverImageRef = "pkg-resolver"
 	dockerfileName   = "Dockerfile"
 	rpmRepoName      = "rpm-repo"
+	gpgDirName       = "gpg-keys"
 )
 
 //go:embed templates/Dockerfile.tpl
@@ -39,8 +39,10 @@ type Resolver struct {
 	imgType string
 	// podman client which to use for container management tasks
 	podman Podman
-	// helper property, contains the names of the rpms that have been taken from the customRPMDir
-	rpms []string
+	// helper property, contains the paths to the rpms that will need resolution
+	rpmPaths []string
+	// helper property, contains the paths to the gpgKeys as seen
+	gpgKeyPaths []string
 }
 
 func New(workDir, imgPath, imgType string, podman Podman) *Resolver {
@@ -83,7 +85,7 @@ func (r *Resolver) Resolve(packages *image.Packages, localRPMConfig *image.Local
 		return "", nil, fmt.Errorf("run container from resolver image %s: %w", resolverImageRef, err)
 	}
 
-	err = r.podman.Copy(id, r.generateRPMRepoPath(), outputDir)
+	err = r.podman.Copy(id, r.generateResolverImgRPMRepoPath(), outputDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("copying resolved package cache to %s: %w", outputDir, err)
 	}
@@ -91,7 +93,7 @@ func (r *Resolver) Resolve(packages *image.Packages, localRPMConfig *image.Local
 	// rpmRepoName is the name of the directory to which all packages/rpms have been resovled to.
 	// Since we are copying a directory inside of the 'outputDir', we concatenate the path in order
 	// to return the correct path.
-	return filepath.Join(outputDir, rpmRepoName), r.getPKGInstallList(packages), nil
+	return filepath.Join(outputDir, rpmRepoName), r.generatePKGInstallList(packages), nil
 }
 
 func (r *Resolver) prepare(localRPMConfig *image.LocalRPMConfig, packages *image.Packages) error {
@@ -102,17 +104,10 @@ func (r *Resolver) prepare(localRPMConfig *image.LocalRPMConfig, packages *image
 		return fmt.Errorf("creating build context dir %s: %w", buildContext, err)
 	}
 
-	if localRPMConfig.LocalPackagesPath != "" {
-		dest := r.generateRPMPathInBuildContext()
-		if err := os.MkdirAll(dest, os.ModePerm); err != nil {
-			return fmt.Errorf("creating rpm directory in resolver dir: %w", err)
+	if localRPMConfig != nil {
+		if err := r.prepareLocalRPMs(localRPMConfig); err != nil {
+			return fmt.Errorf("preparing local RPMs for build: %w", err)
 		}
-
-		rpmNames, err := rpm.CopyRPMs(localRPMConfig.LocalPackagesPath, dest)
-		if err != nil {
-			return fmt.Errorf("copying local rpms to %s: %w", dest, err)
-		}
-		r.rpms = rpmNames
 	}
 
 	if err := r.writeDockerfile(localRPMConfig.LocalPackagesPath, packages); err != nil {
@@ -120,6 +115,37 @@ func (r *Resolver) prepare(localRPMConfig *image.LocalRPMConfig, packages *image
 	}
 
 	zap.L().Info("Resolver image context setup successful")
+	return nil
+}
+
+func (r *Resolver) prepareLocalRPMs(localRPMConfig *image.LocalRPMConfig) error {
+	rpmDest := r.generateRPMPathInBuildContext()
+	if err := fileio.CopyFiles(localRPMConfig.LocalPackagesPath, rpmDest, ".rpm", false); err != nil {
+		return fmt.Errorf("copying local rpms to %s: %w", rpmDest, err)
+	}
+
+	rpmPaths, err := r.generateResolverImgRPMPaths()
+	if err != nil {
+		return fmt.Errorf("constructing list of rpm paths that need to be installed: %w", err)
+	}
+	// path to rpms as seen in the resolver image
+	r.rpmPaths = rpmPaths
+
+	if localRPMConfig.GPGKeysPath != "" {
+		gpgDest := r.generateGPGPathInBuildContext()
+		if err := fileio.CopyFiles(localRPMConfig.GPGKeysPath, gpgDest, "", false); err != nil {
+			return fmt.Errorf("copying local RPM GPG keys to %s: %w", gpgDest, err)
+		}
+
+		gpgPaths, err := r.generateResolverImgGPGPaths()
+		if err != nil {
+			return fmt.Errorf("constructing list of gpg paths that need to be imported: %w", err)
+		}
+
+		// path to GPG keys as seen in the resolver image
+		r.gpgKeyPaths = gpgPaths
+	}
+
 	return nil
 }
 
@@ -136,13 +162,13 @@ func (r *Resolver) writeDockerfile(localPackagesPath string, packages *image.Pac
 		BaseImage: baseImageRef,
 		RegCode:   packages.RegCode,
 		AddRepo:   r.generateAddRepoStr(packages.AdditionalRepos),
-		CacheDir:  r.generateRPMRepoPath(),
+		CacheDir:  r.generateResolverImgRPMRepoPath(),
 		PkgList:   strings.Join(r.getPKGForResolve(packages), " "),
 	}
 
 	if localPackagesPath != "" {
 		values.FromRPMPath = filepath.Base(r.generateRPMPathInBuildContext())
-		values.ToRPMPath = r.generateLocalRPMDirPath()
+		values.ToRPMPath = r.generateResolverImgLocalRPMDirPath()
 	}
 
 	data, err := template.Parse(dockerfileName, dockerfileTemplate, &values)
@@ -174,28 +200,28 @@ func (r *Resolver) getPKGForResolve(packages *image.Packages) []string {
 		list = append(list, packages.PKGList...)
 	}
 
-	if len(r.rpms) > 0 {
+	if len(r.rpmPaths) > 0 {
 		// generate RPM paths as seen in the resolver image,
 		// needed so that 'zypper install' can locate the rpms
-		for _, name := range r.rpms {
-			list = append(list, filepath.Join(r.generateLocalRPMDirPath(), name))
+		for _, path := range r.rpmPaths {
+			list = append(list, filepath.Join(r.generateResolverImgLocalRPMDirPath(), filepath.Base(path)))
 		}
 	}
 	return list
 }
 
-func (r *Resolver) getPKGInstallList(packages *image.Packages) []string {
+func (r *Resolver) generatePKGInstallList(packages *image.Packages) []string {
 	list := []string{}
 
 	if len(packages.PKGList) > 0 {
 		list = append(list, packages.PKGList...)
 	}
 
-	if len(r.rpms) > 0 {
+	if len(r.rpmPaths) > 0 {
 		// generate the RPMs as package names,
 		// so that zypper can locate them in the RPM repository
-		for _, name := range r.rpms {
-			list = append(list, strings.TrimSuffix(name, filepath.Ext(name)))
+		for _, path := range r.rpmPaths {
+			list = append(list, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 		}
 	}
 	return list
@@ -211,12 +237,48 @@ func (r *Resolver) generateRPMPathInBuildContext() string {
 	return filepath.Join(r.generateBuildContextPath(), "rpms")
 }
 
-// path to rpm cache dir, as seen in the resolver image
-func (r *Resolver) generateRPMRepoPath() string {
+// path to the gpg keys directory in the resolver build context, as seen in the EIB image
+func (r *Resolver) generateGPGPathInBuildContext() string {
+	return filepath.Join(r.generateBuildContextPath(), gpgDirName)
+}
+
+func (r *Resolver) generateResolverImgGPGPaths() (gpgPathList []string, err error) {
+	gpgs, err := os.ReadDir(r.generateGPGPathInBuildContext())
+	if err != nil {
+		return nil, fmt.Errorf("reading GPG source dir: %w", err)
+	}
+
+	for _, gpg := range gpgs {
+		gpgPathList = append(gpgPathList, filepath.Join(r.generateGPGPathInBuildContext(), gpg.Name()))
+	}
+
+	return gpgPathList, nil
+}
+
+func (r *Resolver) generateResolverImgRPMPaths() (rpmPathList []string, err error) {
+	rpms, err := os.ReadDir(r.generateRPMPathInBuildContext())
+	if err != nil {
+		return nil, fmt.Errorf("reading RPM source dir: %w", err)
+	}
+
+	for _, rpm := range rpms {
+		rpmPathList = append(rpmPathList, filepath.Join(r.generateResolverImgLocalRPMDirPath(), rpm.Name()))
+	}
+
+	return rpmPathList, nil
+}
+
+// path to rpm cache directory, as seen in the resolver image
+func (r *Resolver) generateResolverImgRPMRepoPath() string {
 	return filepath.Join(os.TempDir(), rpmRepoName)
 }
 
-// path to the dir containing local rpms, as seen in the resolver image
-func (r *Resolver) generateLocalRPMDirPath() string {
-	return filepath.Join(r.generateRPMRepoPath(), "local")
+// path to the GPG keys directory, as seen in the resolver image
+func (r *Resolver) generateResolverImgGPGKeyPath() string {
+	return filepath.Join(os.TempDir(), gpgDirName)
+}
+
+// path to the directory containing local rpms, as seen in the resolver image
+func (r *Resolver) generateResolverImgLocalRPMDirPath() string {
+	return filepath.Join(r.generateResolverImgRPMRepoPath(), "local")
 }
