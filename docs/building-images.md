@@ -68,6 +68,14 @@ operatingSystem:
     disable:
       - serviceX
   keymap: us
+  packages:
+    noGPGCheck: true
+    packageList:
+      - pkg1
+      - pkg2
+    additionalRepos:
+      - url: https://foo.bar
+    registrationCode: scc-reg-code
 ```
 
 * `installDevice` - Optional; only for ISO images - specifies the disk that should be used as the install
@@ -100,6 +108,11 @@ operatingSystem:
   * `disable` - Optional; List of systemd services to disable.
 * `keymap` - Optional; sets the virtual console (VC) keymap, full list via `localectl list-keymaps`. If unset, we default to
   `us`.
+* `packages` - Optional; Defines packages that need to be resolved and installed on the operating system during the combustion phase. For detailed information about how to use EIB's package resolution and installation logic, see the [Installing pacakges](installing-packages.md) guide.
+  * `noGPGCheck` - Optional; Defines whether GPG validation should be done over all additional repositories and side-loaded RPMs. If set to `true` it effectively disables all GPG validaiton. If unset, defaults to `false`. **Disabling GPG validation is intended for development purposes only!**
+  * `packageList` - Optional; List of packages that are to be installed from the provided additional repositories or SUSEs internal RPM repositories.
+  * `additionalRepos` - Optional; List of third-party RPM repository URLs that are to be added to the OS package manager.
+  * `registrationCode` - Optional; SUSE Customer Center registration code, will be used to connect to SUSEs internal RPM repositories.
 
 ## SUSE Manager (SUMA)
 
